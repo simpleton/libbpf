@@ -6,7 +6,6 @@ usage () {
 	echo "Set BPF_NEXT_BASELINE to override bpf-next tree commit, otherwise read from <libbpf-repo>/CHECKPOINT-COMMIT."
 	echo "Set BPF_BASELINE to override bpf tree commit, otherwise read from <libbpf-repo>/BPF-CHECKPOINT-COMMIT."
 	echo "Set MANUAL_MODE to 1 to manually control every cherry-picked commits."
-	echo "Set IGNORE_CONSISTENCY to 1 to ignore failed contents consistency check."
 	exit 1
 }
 
@@ -46,12 +45,12 @@ PATH_MAP=(									\
 	[tools/include/uapi/linux/if_link.h]=include/uapi/linux/if_link.h	\
 	[tools/include/uapi/linux/if_xdp.h]=include/uapi/linux/if_xdp.h		\
 	[tools/include/uapi/linux/netlink.h]=include/uapi/linux/netlink.h	\
-	[tools/include/tools/libc_compat.h]=include/tools/libc_compat.h		\
 )
 
-LIBBPF_PATHS="${!PATH_MAP[@]}"
+LIBBPF_PATHS="${!PATH_MAP[@]} :^tools/lib/bpf/Makefile :^tools/lib/bpf/Build :^tools/lib/bpf/.gitignore :^tools/include/tools/libc_compat.h"
 LIBBPF_VIEW_PATHS="${PATH_MAP[@]}"
 LIBBPF_VIEW_EXCLUDE_REGEX='^src/(Makefile|Build|test_libbpf\.c|bpf_helper_defs\.h|\.gitignore)$'
+LINUX_VIEW_EXCLUDE_REGEX='^include/tools/libc_compat.h$'
 
 LIBBPF_TREE_FILTER="mkdir -p __libbpf/include/uapi/linux __libbpf/include/tools && "$'\\\n'
 for p in "${!PATH_MAP[@]}"; do
@@ -79,39 +78,10 @@ commit_desc()
 # The idea is that this single-line signature is good enough to make final
 # decision about whether two commits are the same, across different repos.
 # $1 - commit ref
+# $2 - paths filter
 commit_signature()
 {
-	git log -n1 --pretty='("%s")|%aI|%b' --shortstat $1 | tr '\n' '|'
-}
-
-# Validate there are no non-empty merges (we can't handle them)
-# $1 - baseline tag
-# $2 - tip tag
-validate_merges()
-{
-	local baseline_tag=$1
-	local tip_tag=$2
-	local new_merges
-	local merge_change_cnt
-	local ignore_merge_resolutions
-	local desc
-
-	new_merges=$(git rev-list --merges --topo-order --reverse ${baseline_tag}..${tip_tag} ${LIBBPF_PATHS[@]})
-	for new_merge in ${new_merges}; do
-		desc=$(commit_desc ${new_merge})
-		echo "MERGE: ${desc}"
-		merge_change_cnt=$(git show --format='' ${new_merge} | wc -l)
-		if ((${merge_change_cnt} > 0)); then
-			read -p "Merge '${desc}' is non-empty, which will cause conflicts! Do you want to proceed? [y/N]: " ignore_merge_resolutions
-			case "${ignore_merge_resolutions}" in
-				"y" | "Y")
-					echo "Skipping '${desc}'..."
-					continue
-					;;
-			esac
-			exit 3
-		fi
-	done
+	git show --pretty='("%s")|%aI|%b' --shortstat $1 -- ${2-.} | tr '\n' '|'
 }
 
 # Cherry-pick commits touching libbpf-related files
@@ -133,7 +103,7 @@ cherry_pick_commits()
 	new_commits=$(git rev-list --no-merges --topo-order --reverse ${baseline_tag}..${tip_tag} ${LIBBPF_PATHS[@]})
 	for new_commit in ${new_commits}; do
 		desc="$(commit_desc ${new_commit})"
-		signature="$(commit_signature ${new_commit})"
+		signature="$(commit_signature ${new_commit} "${LIBBPF_PATHS[@]}")"
 		synced_cnt=$(grep -F "${signature}" ${TMP_DIR}/libbpf_commits.txt | wc -l)
 		manual_check=0
 		if ((${synced_cnt} > 0)); then
@@ -166,6 +136,7 @@ cherry_pick_commits()
 			echo "Warning! Cherry-picking '${desc} failed, checking if it's non-libbpf files causing problems..."
 			libbpf_conflict_cnt=$(git diff --name-only --diff-filter=U -- ${LIBBPF_PATHS[@]} | wc -l)
 			conflict_cnt=$(git diff --name-only | wc -l)
+			prompt_resolution=1
 
 			if ((${libbpf_conflict_cnt} == 0)); then
 				echo "Looks like only non-libbpf files have conflicts, ignoring..."
@@ -181,14 +152,36 @@ cherry_pick_commits()
 					echo "Error! That still failed! Please resolve manually."
 				else
 					echo "Success! All cherry-pick conflicts were resolved for '${desc}'!"
-					continue
+					prompt_resolution=0
 				fi
 			fi
 
-			read -p "Error! Cherry-picking '${desc}' failed, please fix manually and press <return> to proceed..."
+			if ((${prompt_resolution} == 1)); then
+				read -p "Error! Cherry-picking '${desc}' failed, please fix manually and press <return> to proceed..."
+			fi
 		fi
+		# Append signature of just cherry-picked commit to avoid
+		# potentially cherry-picking the same commit twice later when
+		# processing bpf tree commits. At this point we don't know yet
+		# the final commit sha in libbpf repo, so we record Linux SHA
+		# instead as LINUX_<sha>.
+		echo LINUX_$(git log --pretty='%h' -n1) "${signature}" >> ${TMP_DIR}/libbpf_commits.txt
 	done
 }
+
+cleanup()
+{
+	echo "Cleaning up..."
+	rm -r ${TMP_DIR}
+	cd_to ${LINUX_REPO}
+	git checkout ${TIP_SYM_REF}
+	git branch -D ${BASELINE_TAG} ${TIP_TAG} ${BPF_BASELINE_TAG} ${BPF_TIP_TAG} \
+		      ${SQUASH_BASE_TAG} ${SQUASH_TIP_TAG} ${VIEW_TAG} || true
+
+	cd_to .
+	echo "DONE."
+}
+
 
 cd_to ${LIBBPF_REPO}
 GITHUB_ABS_DIR=$(pwd)
@@ -242,23 +235,20 @@ git branch ${BPF_TIP_TAG} ${BPF_TIP_COMMIT}
 git branch ${SQUASH_BASE_TAG} ${SQUASH_COMMIT}
 git checkout -b ${SQUASH_TIP_TAG} ${SQUASH_COMMIT}
 
-# Validate there are no non-empty merges in bpf-next and bpf trees
-validate_merges ${BASELINE_TAG} ${TIP_TAG}
-validate_merges ${BPF_BASELINE_TAG} ${BPF_TIP_TAG}
-
 # Cherry-pick new commits onto squashed baseline commit
 cherry_pick_commits ${BASELINE_TAG} ${TIP_TAG}
 cherry_pick_commits ${BPF_BASELINE_TAG} ${BPF_TIP_TAG}
 
 # Move all libbpf files into __libbpf directory.
-git filter-branch --prune-empty -f --tree-filter "${LIBBPF_TREE_FILTER}" ${SQUASH_TIP_TAG} ${SQUASH_BASE_TAG}
+FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch --prune-empty -f --tree-filter "${LIBBPF_TREE_FILTER}" ${SQUASH_TIP_TAG} ${SQUASH_BASE_TAG}
 # Make __libbpf a new root directory
-git filter-branch --prune-empty -f --subdirectory-filter __libbpf ${SQUASH_TIP_TAG} ${SQUASH_BASE_TAG}
+FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch --prune-empty -f --subdirectory-filter __libbpf ${SQUASH_TIP_TAG} ${SQUASH_BASE_TAG}
 
 # If there are no new commits with  libbpf-related changes, bail out
 COMMIT_CNT=$(git rev-list --count ${SQUASH_BASE_TAG}..${SQUASH_TIP_TAG})
 if ((${COMMIT_CNT} <= 0)); then
     echo "No new changes to apply, we are done!"
+    cleanup
     exit 2
 fi
 
@@ -270,7 +260,7 @@ cd_to ${LIBBPF_REPO}
 git checkout -b ${LIBBPF_SYNC_TAG}
 
 for patch in $(ls -1 ${TMP_DIR}/patches | tail -n +2); do
-	if ! git am --committer-date-is-author-date "${TMP_DIR}/patches/${patch}"; then
+	if ! git am --3way --committer-date-is-author-date "${TMP_DIR}/patches/${patch}"; then
 		read -p "Applying ${TMP_DIR}/patches/${patch} failed, please resolve manually and press <return> to proceed..."
 	fi
 done
@@ -317,9 +307,9 @@ echo "Verifying Linux's and Github's libbpf state"
 
 cd_to ${LINUX_REPO}
 git checkout -b ${VIEW_TAG} ${TIP_COMMIT}
-git filter-branch -f --tree-filter "${LIBBPF_TREE_FILTER}" ${VIEW_TAG}^..${VIEW_TAG}
-git filter-branch -f --subdirectory-filter __libbpf ${VIEW_TAG}^..${VIEW_TAG}
-git ls-files -- ${LIBBPF_VIEW_PATHS[@]} > ${TMP_DIR}/linux-view.ls
+FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch -f --tree-filter "${LIBBPF_TREE_FILTER}" ${VIEW_TAG}^..${VIEW_TAG}
+FILTER_BRANCH_SQUELCH_WARNING=1 git filter-branch -f --subdirectory-filter __libbpf ${VIEW_TAG}^..${VIEW_TAG}
+git ls-files -- ${LIBBPF_VIEW_PATHS[@]} | grep -v -E "${LINUX_VIEW_EXCLUDE_REGEX}" > ${TMP_DIR}/linux-view.ls
 
 cd_to ${LIBBPF_REPO}
 git ls-files -- ${LIBBPF_VIEW_PATHS[@]} | grep -v -E "${LIBBPF_VIEW_EXCLUDE_REGEX}" > ${TMP_DIR}/github-view.ls
@@ -337,19 +327,17 @@ done
 if ((${CONSISTENT} == 1)); then
 	echo "Great! Content is identical!"
 else
-	echo "Unfortunately, there are consistency problems!"
-	if ((${IGNORE_CONSISTENCY-0} != 1)); then
-		exit 4
-	fi
+	ignore_inconsistency=n
+	echo "Unfortunately, there are some inconsistencies, please double check."
+	read -p "Does everything look good? [y/N]: " ignore_inconsistency
+	case "${ignore_inconsistency}" in
+		"y" | "Y")
+			echo "Ok, proceeding..."
+			;;
+		*)
+			echo "Oops, exiting with error..."
+			exit 4
+	esac
 fi
 
-echo "Cleaning up..."
-rm -r ${TMP_DIR}
-cd_to ${LINUX_REPO}
-git checkout ${TIP_SYM_REF}
-git branch -D ${BASELINE_TAG} ${TIP_TAG} ${BPF_BASELINE_TAG} ${BPF_TIP_TAG} \
-	      ${SQUASH_BASE_TAG} ${SQUASH_TIP_TAG} ${VIEW_TAG}
-
-cd_to .
-echo "DONE."
-
+cleanup
