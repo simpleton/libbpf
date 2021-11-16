@@ -34,5 +34,6 @@ cc_library_host_static {
     ],
     visibility: [
         "//external/dwarves",
+        "//external/stg",
     ],
 }
