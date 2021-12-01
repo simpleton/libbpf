@@ -14,7 +14,6 @@
 
 cc_library_host_static {
     name: "libbpf",
-    defaults: ["dwarves_defaults"],
     srcs: [
         "src/*.c",
     ],
@@ -28,6 +27,8 @@ cc_library_host_static {
     cflags: [
         "-DCOMPAT_NEED_REALLOCARRAY",
         "-Wno-missing-field-initializers",
+        "-Wno-pointer-arith",
+        "-Wno-unused-parameter",
     ],
     static_libs: [
         "libelf",
@@ -36,4 +37,5 @@ cc_library_host_static {
         "//external/dwarves",
         "//external/stg",
     ],
+    compile_multilib: "64",
 }
