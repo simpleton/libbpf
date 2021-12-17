@@ -12,6 +12,29 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+genrule {
+    name: "libbpf_headers",
+    srcs: [
+        "src/*.h",
+    ],
+    cmd: "mkdir -p $(genDir)/bpf && cp $(in) $(genDir)/bpf/",
+    out: [
+        "bpf/bpf_core_read.h",
+        "bpf/bpf_endian.h",
+        "bpf/bpf.h",
+        "bpf/bpf_helper_defs.h",
+        "bpf/bpf_helpers.h",
+        "bpf/bpf_tracing.h",
+        "bpf/btf.h",
+        "bpf/libbpf_common.h",
+        "bpf/libbpf.h",
+        "bpf/libbpf_legacy.h",
+        "bpf/libbpf_version.h",
+        "bpf/skel_internal.h",
+        "bpf/xsk.h",
+    ],
+}
+
 cc_library_host_static {
     name: "libbpf",
     srcs: [
@@ -24,6 +47,8 @@ cc_library_host_static {
     export_include_dirs: [
         "include/uapi",
     ],
+    generated_headers: ["libbpf_headers"],
+    export_generated_headers: ["libbpf_headers"],
     cflags: [
         "-DCOMPAT_NEED_REALLOCARRAY",
         "-Wno-missing-field-initializers",
