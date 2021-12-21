@@ -27,6 +27,7 @@ struct tcp_sock;
 struct tcp_timewait_sock;
 struct tcp_request_sock;
 struct udp6_sock;
+struct unix_sock;
 struct task_struct;
 struct __sk_buff;
 struct sk_msg_md;
@@ -36,6 +37,7 @@ struct btf_ptr;
 struct inode;
 struct socket;
 struct file;
+struct bpf_timer;
 
 /*
  * bpf_map_lookup_elem
@@ -189,7 +191,7 @@ static __u32 (*bpf_get_prandom_u32)(void) = (void *) 7;
  * bpf_get_smp_processor_id
  *
  * 	Get the SMP (symmetric multiprocessing) processor id. Note that
- * 	all programs run with preemption disabled, which means that the
+ * 	all programs run with migration disabled, which means that the
  * 	SMP processor id is stable during all the execution of the
  * 	program.
  *
@@ -312,7 +314,7 @@ static long (*bpf_l4_csum_replace)(struct __sk_buff *skb, __u32 offset, __u64 fr
  * 	if the maximum number of tail calls has been reached for this
  * 	chain of programs. This limit is defined in the kernel by the
  * 	macro **MAX_TAIL_CALL_CNT** (not accessible to user space),
- * 	which is currently set to 32.
+ * 	which is currently set to 33.
  *
  * Returns
  * 	0 on success, or a negative error in case of failure.
@@ -2094,7 +2096,7 @@ static void *(*bpf_get_local_storage)(void *map, __u64 flags) = (void *) 81;
  * bpf_sk_select_reuseport
  *
  * 	Select a **SO_REUSEPORT** socket from a
- * 	**BPF_MAP_TYPE_REUSEPORT_ARRAY** *map*.
+ * 	**BPF_MAP_TYPE_REUSEPORT_SOCKARRAY** *map*.
  * 	It checks the selected socket is matching the incoming
  * 	request in the socket buffer.
  *
@@ -3011,7 +3013,7 @@ static __u64 (*bpf_ktime_get_boot_ns)(void) = (void *) 125;
  * 	arguments. The *data* are a **u64** array and corresponding format string
  * 	values are stored in the array. For strings and pointers where pointees
  * 	are accessed, only the pointer values are stored in the *data* array.
- * 	The *data_len* is the size of *data* in bytes.
+ * 	The *data_len* is the size of *data* in bytes - must be a multiple of 8.
  *
  * 	Formats **%s**, **%p{i,I}{4,6}** requires to read kernel memory.
  * 	Reading kernel memory may fail due to either invalid address or
@@ -3872,7 +3874,8 @@ static long (*bpf_for_each_map_elem)(void *map, void *callback_fn, void *callbac
  * 	Each format specifier in **fmt** corresponds to one u64 element
  * 	in the **data** array. For strings and pointers where pointees
  * 	are accessed, only the pointer values are stored in the *data*
- * 	array. The *data_len* is the size of *data* in bytes.
+ * 	array. The *data_len* is the size of *data* in bytes - must be
+ * 	a multiple of 8.
  *
  * 	Formats **%s** and **%p{i,I}{4,6}** require to read kernel
  * 	memory. Reading kernel memory may fail due to either invalid
@@ -3922,5 +3925,294 @@ static long (*bpf_btf_find_by_name_kind)(char *name, int name_sz, __u32 kind, in
  * 	A syscall result.
  */
 static long (*bpf_sys_close)(__u32 fd) = (void *) 168;
+
+/*
+ * bpf_timer_init
+ *
+ * 	Initialize the timer.
+ * 	First 4 bits of *flags* specify clockid.
+ * 	Only CLOCK_MONOTONIC, CLOCK_REALTIME, CLOCK_BOOTTIME are allowed.
+ * 	All other bits of *flags* are reserved.
+ * 	The verifier will reject the program if *timer* is not from
+ * 	the same *map*.
+ *
+ * Returns
+ * 	0 on success.
+ * 	**-EBUSY** if *timer* is already initialized.
+ * 	**-EINVAL** if invalid *flags* are passed.
+ * 	**-EPERM** if *timer* is in a map that doesn't have any user references.
+ * 	The user space should either hold a file descriptor to a map with timers
+ * 	or pin such map in bpffs. When map is unpinned or file descriptor is
+ * 	closed all timers in the map will be cancelled and freed.
+ */
+static long (*bpf_timer_init)(struct bpf_timer *timer, void *map, __u64 flags) = (void *) 169;
+
+/*
+ * bpf_timer_set_callback
+ *
+ * 	Configure the timer to call *callback_fn* static function.
+ *
+ * Returns
+ * 	0 on success.
+ * 	**-EINVAL** if *timer* was not initialized with bpf_timer_init() earlier.
+ * 	**-EPERM** if *timer* is in a map that doesn't have any user references.
+ * 	The user space should either hold a file descriptor to a map with timers
+ * 	or pin such map in bpffs. When map is unpinned or file descriptor is
+ * 	closed all timers in the map will be cancelled and freed.
+ */
+static long (*bpf_timer_set_callback)(struct bpf_timer *timer, void *callback_fn) = (void *) 170;
+
+/*
+ * bpf_timer_start
+ *
+ * 	Set timer expiration N nanoseconds from the current time. The
+ * 	configured callback will be invoked in soft irq context on some cpu
+ * 	and will not repeat unless another bpf_timer_start() is made.
+ * 	In such case the next invocation can migrate to a different cpu.
+ * 	Since struct bpf_timer is a field inside map element the map
+ * 	owns the timer. The bpf_timer_set_callback() will increment refcnt
+ * 	of BPF program to make sure that callback_fn code stays valid.
+ * 	When user space reference to a map reaches zero all timers
+ * 	in a map are cancelled and corresponding program's refcnts are
+ * 	decremented. This is done to make sure that Ctrl-C of a user
+ * 	process doesn't leave any timers running. If map is pinned in
+ * 	bpffs the callback_fn can re-arm itself indefinitely.
+ * 	bpf_map_update/delete_elem() helpers and user space sys_bpf commands
+ * 	cancel and free the timer in the given map element.
+ * 	The map can contain timers that invoke callback_fn-s from different
+ * 	programs. The same callback_fn can serve different timers from
+ * 	different maps if key/value layout matches across maps.
+ * 	Every bpf_timer_set_callback() can have different callback_fn.
+ *
+ *
+ * Returns
+ * 	0 on success.
+ * 	**-EINVAL** if *timer* was not initialized with bpf_timer_init() earlier
+ * 	or invalid *flags* are passed.
+ */
+static long (*bpf_timer_start)(struct bpf_timer *timer, __u64 nsecs, __u64 flags) = (void *) 171;
+
+/*
+ * bpf_timer_cancel
+ *
+ * 	Cancel the timer and wait for callback_fn to finish if it was running.
+ *
+ * Returns
+ * 	0 if the timer was not active.
+ * 	1 if the timer was active.
+ * 	**-EINVAL** if *timer* was not initialized with bpf_timer_init() earlier.
+ * 	**-EDEADLK** if callback_fn tried to call bpf_timer_cancel() on its
+ * 	own timer which would have led to a deadlock otherwise.
+ */
+static long (*bpf_timer_cancel)(struct bpf_timer *timer) = (void *) 172;
+
+/*
+ * bpf_get_func_ip
+ *
+ * 	Get address of the traced function (for tracing and kprobe programs).
+ *
+ * Returns
+ * 	Address of the traced function.
+ */
+static __u64 (*bpf_get_func_ip)(void *ctx) = (void *) 173;
+
+/*
+ * bpf_get_attach_cookie
+ *
+ * 	Get bpf_cookie value provided (optionally) during the program
+ * 	attachment. It might be different for each individual
+ * 	attachment, even if BPF program itself is the same.
+ * 	Expects BPF program context *ctx* as a first argument.
+ *
+ * 	Supported for the following program types:
+ * 		- kprobe/uprobe;
+ * 		- tracepoint;
+ * 		- perf_event.
+ *
+ * Returns
+ * 	Value specified by user at BPF link creation/attachment time
+ * 	or 0, if it was not specified.
+ */
+static __u64 (*bpf_get_attach_cookie)(void *ctx) = (void *) 174;
+
+/*
+ * bpf_task_pt_regs
+ *
+ * 	Get the struct pt_regs associated with **task**.
+ *
+ * Returns
+ * 	A pointer to struct pt_regs.
+ */
+static long (*bpf_task_pt_regs)(struct task_struct *task) = (void *) 175;
+
+/*
+ * bpf_get_branch_snapshot
+ *
+ * 	Get branch trace from hardware engines like Intel LBR. The
+ * 	hardware engine is stopped shortly after the helper is
+ * 	called. Therefore, the user need to filter branch entries
+ * 	based on the actual use case. To capture branch trace
+ * 	before the trigger point of the BPF program, the helper
+ * 	should be called at the beginning of the BPF program.
+ *
+ * 	The data is stored as struct perf_branch_entry into output
+ * 	buffer *entries*. *size* is the size of *entries* in bytes.
+ * 	*flags* is reserved for now and must be zero.
+ *
+ *
+ * Returns
+ * 	On success, number of bytes written to *buf*. On error, a
+ * 	negative value.
+ *
+ * 	**-EINVAL** if *flags* is not zero.
+ *
+ * 	**-ENOENT** if architecture does not support branch records.
+ */
+static long (*bpf_get_branch_snapshot)(void *entries, __u32 size, __u64 flags) = (void *) 176;
+
+/*
+ * bpf_trace_vprintk
+ *
+ * 	Behaves like **bpf_trace_printk**\ () helper, but takes an array of u64
+ * 	to format and can handle more format args as a result.
+ *
+ * 	Arguments are to be used as in **bpf_seq_printf**\ () helper.
+ *
+ * Returns
+ * 	The number of bytes written to the buffer, or a negative error
+ * 	in case of failure.
+ */
+static long (*bpf_trace_vprintk)(const char *fmt, __u32 fmt_size, const void *data, __u32 data_len) = (void *) 177;
+
+/*
+ * bpf_skc_to_unix_sock
+ *
+ * 	Dynamically cast a *sk* pointer to a *unix_sock* pointer.
+ *
+ * Returns
+ * 	*sk* if casting is valid, or **NULL** otherwise.
+ */
+static struct unix_sock *(*bpf_skc_to_unix_sock)(void *sk) = (void *) 178;
+
+/*
+ * bpf_kallsyms_lookup_name
+ *
+ * 	Get the address of a kernel symbol, returned in *res*. *res* is
+ * 	set to 0 if the symbol is not found.
+ *
+ * Returns
+ * 	On success, zero. On error, a negative value.
+ *
+ * 	**-EINVAL** if *flags* is not zero.
+ *
+ * 	**-EINVAL** if string *name* is not the same size as *name_sz*.
+ *
+ * 	**-ENOENT** if symbol is not found.
+ *
+ * 	**-EPERM** if caller does not have permission to obtain kernel address.
+ */
+static long (*bpf_kallsyms_lookup_name)(const char *name, int name_sz, int flags, __u64 *res) = (void *) 179;
+
+/*
+ * bpf_find_vma
+ *
+ * 	Find vma of *task* that contains *addr*, call *callback_fn*
+ * 	function with *task*, *vma*, and *callback_ctx*.
+ * 	The *callback_fn* should be a static function and
+ * 	the *callback_ctx* should be a pointer to the stack.
+ * 	The *flags* is used to control certain aspects of the helper.
+ * 	Currently, the *flags* must be 0.
+ *
+ * 	The expected callback signature is
+ *
+ * 	long (\*callback_fn)(struct task_struct \*task, struct vm_area_struct \*vma, void \*callback_ctx);
+ *
+ *
+ * Returns
+ * 	0 on success.
+ * 	**-ENOENT** if *task->mm* is NULL, or no vma contains *addr*.
+ * 	**-EBUSY** if failed to try lock mmap_lock.
+ * 	**-EINVAL** for invalid **flags**.
+ */
+static long (*bpf_find_vma)(struct task_struct *task, __u64 addr, void *callback_fn, void *callback_ctx, __u64 flags) = (void *) 180;
+
+/*
+ * bpf_loop
+ *
+ * 	For **nr_loops**, call **callback_fn** function
+ * 	with **callback_ctx** as the context parameter.
+ * 	The **callback_fn** should be a static function and
+ * 	the **callback_ctx** should be a pointer to the stack.
+ * 	The **flags** is used to control certain aspects of the helper.
+ * 	Currently, the **flags** must be 0. Currently, nr_loops is
+ * 	limited to 1 << 23 (~8 million) loops.
+ *
+ * 	long (\*callback_fn)(u32 index, void \*ctx);
+ *
+ * 	where **index** is the current index in the loop. The index
+ * 	is zero-indexed.
+ *
+ * 	If **callback_fn** returns 0, the helper will continue to the next
+ * 	loop. If return value is 1, the helper will skip the rest of
+ * 	the loops and return. Other return values are not used now,
+ * 	and will be rejected by the verifier.
+ *
+ *
+ * Returns
+ * 	The number of loops performed, **-EINVAL** for invalid **flags**,
+ * 	**-E2BIG** if **nr_loops** exceeds the maximum number of loops.
+ */
+static long (*bpf_loop)(__u32 nr_loops, void *callback_fn, void *callback_ctx, __u64 flags) = (void *) 181;
+
+/*
+ * bpf_strncmp
+ *
+ * 	Do strncmp() between **s1** and **s2**. **s1** doesn't need
+ * 	to be null-terminated and **s1_sz** is the maximum storage
+ * 	size of **s1**. **s2** must be a read-only string.
+ *
+ * Returns
+ * 	An integer less than, equal to, or greater than zero
+ * 	if the first **s1_sz** bytes of **s1** is found to be
+ * 	less than, to match, or be greater than **s2**.
+ */
+static long (*bpf_strncmp)(const char *s1, __u32 s1_sz, const char *s2) = (void *) 182;
+
+/*
+ * bpf_get_func_arg
+ *
+ * 	Get **n**-th argument (zero based) of the traced function (for tracing programs)
+ * 	returned in **value**.
+ *
+ *
+ * Returns
+ * 	0 on success.
+ * 	**-EINVAL** if n >= arguments count of traced function.
+ */
+static long (*bpf_get_func_arg)(void *ctx, __u32 n, __u64 *value) = (void *) 183;
+
+/*
+ * bpf_get_func_ret
+ *
+ * 	Get return value of the traced function (for tracing programs)
+ * 	in **value**.
+ *
+ *
+ * Returns
+ * 	0 on success.
+ * 	**-EOPNOTSUPP** for tracing programs other than BPF_TRACE_FEXIT or BPF_MODIFY_RETURN.
+ */
+static long (*bpf_get_func_ret)(void *ctx, __u64 *value) = (void *) 184;
+
+/*
+ * bpf_get_func_arg_cnt
+ *
+ * 	Get number of arguments of the traced function (for tracing programs).
+ *
+ *
+ * Returns
+ * 	The number of arguments of the traced function.
+ */
+static long (*bpf_get_func_arg_cnt)(void *ctx) = (void *) 185;
 
 

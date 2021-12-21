@@ -11,7 +11,7 @@ third_party {
     type: GIT
     value: "https://github.com/libbpf/libbpf"
   }
-  version: "dd34504b43ff256b85867c168fd98ccba76d9228"
-  last_upgrade_date { year: 2021 month: 7 day: 12 }
+  version: "9fab7c81ecd462ce6aa1eabd24b230f0fc6a14c7"
+  last_upgrade_date { year: 2022 month: 1 day: 5 }
   license_type: NOTICE
 }
