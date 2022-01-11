@@ -47,6 +47,9 @@ struct bpf_load_and_run_opts {
 	const char *errstr;
 };
 
+// ANDROID: Since the glibc stub we have does not know about __NR_bpf, this
+// fails to compile. For now, just do not provide this functionality.
+#if 0
 static inline int skel_sys_bpf(enum bpf_cmd cmd, union bpf_attr *attr,
 			  unsigned int size)
 {
@@ -119,5 +122,6 @@ out:
 		close(prog_fd);
 	return err;
 }
+#endif
 
 #endif
