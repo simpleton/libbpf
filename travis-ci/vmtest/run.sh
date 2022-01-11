@@ -3,6 +3,8 @@
 set -uo pipefail
 trap 'exit 2' ERR
 
+source $(cd $(dirname $0) && pwd)/helpers.sh
+
 usage () {
 	USAGE_STRING="usage: $0 [-k KERNELRELEASE|-b DIR] [[-r ROOTFSVERSION] [-fo]|-I] [-Si] [-d DIR] IMG
        $0 [-k KERNELRELEASE] -l
@@ -175,11 +177,10 @@ cache_urls() {
 	if ! declare -p URLS &> /dev/null; then
 		# This URL contains a mapping from file names to URLs where
 		# those files can be downloaded.
-		local INDEX='https://libbpf-vmtest.s3-us-west-1.amazonaws.com/x86_64/INDEX'
 		declare -gA URLS
 		while IFS=$'\t' read -r name url; do
 			URLS["$name"]="$url"
-		done < <(curl -LfsS "$INDEX")
+		done < <(cat "${VMTEST_ROOT}/configs/INDEX")
 	fi
 }
 
@@ -276,6 +277,10 @@ if [[ $SKIPIMG -eq 0 && ! -v ROOTFSVERSION ]]; then
 fi
 
 echo "Kernel release: $KERNELRELEASE" >&2
+echo
+
+travis_fold start vmlinux_setup "Preparing Linux image"
+
 if (( SKIPIMG )); then
 	echo "Not extracting root filesystem" >&2
 else
@@ -367,6 +372,15 @@ else
 	sudo chmod 644 "$vmlinux"
 fi
 
+travis_fold end vmlinux_setup
+
+LIBBPF_PATH="${REPO_ROOT}" \
+	REPO_PATH="travis-ci/vmtest/bpf-next" \
+	VMTEST_ROOT="${VMTEST_ROOT}" \
+	VMLINUX_BTF=${vmlinux} ${VMTEST_ROOT}/build_selftests.sh
+
+travis_fold start vm_init "Starting virtual machine..."
+
 if (( SKIPSOURCE )); then
 	echo "Not copying source files..." >&2
 else
@@ -393,13 +407,17 @@ chmod 644 /exitstatus"
 if [[ ! -z SETUPCMD ]]; then
 	# Unescape whitespace characters.
 	setup_cmd=$(sed 's/\(\\\)\([[:space:]]\)/\2/g' <<< "${SETUPCMD}")
+	kernel="${KERNELRELEASE}"
+	if [[ -v BUILDDIR ]]; then kernel='latest'; fi
+	setup_envvars="export KERNEL=${kernel}"
 	setup_script=$(printf "#!/bin/sh
-set -e
+set -eux
 
 echo 'Running setup commands'
 %s
+%s
 echo $? > /exitstatus
-chmod 644 /exitstatus" "${setup_cmd}")
+chmod 644 /exitstatus" "${setup_envvars}" "${setup_cmd}")
 fi
 
 echo "${setup_script}" | sudo tee "$mnt/etc/rcS.d/S50-run-tests" > /dev/null
@@ -407,15 +425,19 @@ sudo chmod 755 "$mnt/etc/rcS.d/S50-run-tests"
 
 poweroff_script="#!/bin/sh
 
+echo travis_fold:start:shutdown
+echo -e '\033[1;33mShutdown\033[0m\n'
+
 poweroff"
 echo "${poweroff_script}" | sudo tee "$mnt/etc/rcS.d/S99-poweroff" > /dev/null
 sudo chmod 755 "$mnt/etc/rcS.d/S99-poweroff"
 
 sudo umount "$mnt"
 
-echo "Starting virtual machine..." >&2
+echo "Starting VM with $(nproc) CPUs..."
+
 qemu-system-x86_64 -nodefaults -display none -serial mon:stdio \
-	-cpu kvm64 -enable-kvm -smp "$(nproc)" -m 2G \
+	-cpu kvm64 -enable-kvm -smp "$(nproc)" -m 4G \
 	-drive file="$IMG",format=raw,index=1,media=disk,if=virtio,cache=none \
 	-kernel "$vmlinuz" -append "root=/dev/vda rw console=ttyS0,115200$APPEND"
 
@@ -427,4 +449,7 @@ else
 	exitstatus=1
 fi
 sudo umount "$mnt"
+
+travis_fold end shutdown
+
 exit "$exitstatus"
