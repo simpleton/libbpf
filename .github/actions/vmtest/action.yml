@@ -1,0 +1,20 @@
+name: 'vmtest'
+description: 'Build + run vmtest'
+inputs:
+  kernel:
+    description: 'kernel or LATEST'
+    required: true
+    default: 'LATEST'
+  pahole:
+    description: 'pahole branch'
+    required: true
+    default: 'master'
+runs:
+  using: "composite"
+  steps:
+    - run: |
+        source /tmp/ci_setup
+        export KERNEL=${{ inputs.kernel }}
+        export PAHOLE_BRANCH=${{ inputs.pahole }}
+        $CI_ROOT/vmtest/run_vmtest.sh
+      shell: bash
