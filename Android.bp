@@ -64,3 +64,30 @@ cc_library_host_static {
     ],
     compile_multilib: "64",
 }
+
+cc_library {
+    name: "libbpf_minimal",
+    native_bridge_supported: true,
+    srcs: [
+        "android/bpf_stub.c",
+        "src/bpf.c",
+        "src/libbpf_errno.c",
+        "src/netlink.c",
+        "src/nlattr.c",
+        "src/ringbuf.c",
+    ],
+    local_include_dirs: [
+        "android",
+        "include"
+    ],
+    export_include_dirs: [
+        "include/uapi"
+    ],
+    generated_headers: ["libbpf_headers"],
+    export_generated_headers: ["libbpf_headers"],
+    cflags: [
+        "-include android/android.h",
+        "-Wno-pointer-arith",
+        "-Wno-unused-parameter",
+    ],
+}
