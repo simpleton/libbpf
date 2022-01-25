@@ -99,3 +99,13 @@ cc_library {
         "-Wno-unused-parameter",
     ],
 }
+
+cc_binary {
+    name: "btfloader",
+    srcs: ["android/btfloader.cpp"],
+    static_libs: [
+        "libbpf",
+        "libelf",
+        "libz"
+    ],
+}
