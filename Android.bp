@@ -35,8 +35,9 @@ genrule {
     ],
 }
 
-cc_library_host_static {
+cc_library_static {
     name: "libbpf",
+    host_supported: true,
     srcs: [
         "src/*.c",
     ],
@@ -51,6 +52,8 @@ cc_library_host_static {
     export_generated_headers: ["libbpf_headers"],
     cflags: [
         "-DCOMPAT_NEED_REALLOCARRAY",
+        "-include android/android.h",
+        "-Wno-constant-conversion",
         "-Wno-missing-field-initializers",
         "-Wno-pointer-arith",
         "-Wno-unused-parameter",
@@ -63,7 +66,11 @@ cc_library_host_static {
         "//external/dwarves",
         "//external/stg",
     ],
-    compile_multilib: "64",
+    target: {
+        host: {
+            compile_multilib: "64",
+        }
+    }
 }
 
 cc_library {
