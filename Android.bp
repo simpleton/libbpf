@@ -85,6 +85,7 @@ cc_library_static {
     ],
     visibility: [
         "//external/bpftool",
+        "//external/bcc/libbpf-tools",
         "//external/dwarves",
         "//external/stg",
     ],
