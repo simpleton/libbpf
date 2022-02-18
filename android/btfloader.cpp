@@ -72,8 +72,8 @@ int main(int argc, char **argv) {
                 bt->info = (BTF_INFO_KIND(bt->info)) << 24;
             }
         }
+        if (btf__load_into_kernel(btf)) return kERROR_LOAD_BTF;
     }
-    if (btf__load_into_kernel(btf)) return kERROR_LOAD_BTF;
 
     btfFd = btf__fd(btf);
     if (sendBtfFd(socketFd, btf__fd(btf))) return kERROR_SEND_BTF_FD;
