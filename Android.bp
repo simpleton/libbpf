@@ -128,4 +128,7 @@ cc_binary {
         "libelf",
         "libz"
     ],
+    cflags: [
+        "-Wno-deprecated-declarations",
+    ]
 }
