@@ -58,7 +58,22 @@ int main(int argc, char **argv) {
     struct btf *btf = bpf_object__btf(obj);
     if (!btf) return kERROR_BTF_NOT_FOUND;
 
-    if (btf__load_into_kernel(btf)) return kERROR_LOAD_BTF;
+    ret = btf__load_into_kernel(btf);
+    if (ret) {
+        if (errno != EINVAL) return kERROR_LOAD_BTF;
+        // For BTF_KIND_FUNC, newer kernels can read the BTF_INFO_VLEN bits of
+        // struct btf_type to distinguish static vs. global vs. extern
+        // functions, but older kernels enforce that only the BTF_INFO_KIND bits
+        // can be set. Retry with non-BTF_INFO_KIND bits zeroed out to handle
+        // this case.
+        for (unsigned int i = 1; i < btf__type_cnt(btf); ++i) {
+            struct btf_type *bt = (struct btf_type *)btf__type_by_id(btf, i);
+            if (btf_is_func(bt)) {
+                bt->info = (BTF_INFO_KIND(bt->info)) << 24;
+            }
+        }
+        if (btf__load_into_kernel(btf)) return kERROR_LOAD_BTF;
+    }
 
     btfFd = btf__fd(btf);
     if (sendBtfFd(socketFd, btf__fd(btf))) return kERROR_SEND_BTF_FD;
