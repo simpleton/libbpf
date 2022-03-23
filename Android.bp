@@ -12,6 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+package {
+    default_applicable_licenses: ["external_libbpf_license"],
+}
+
+// See: http://go/android-license-faq
+license {
+    name: "external_libbpf_license",
+    visibility: [":__subpackages__"],
+    license_kinds: [
+        "SPDX-license-identifier-BSD-2-Clause",
+        "SPDX-license-identifier-GPL-2.0",
+        "SPDX-license-identifier-LGPL-2.1-only",
+    ],
+    license_text: [
+        "LICENSE.BSD-2-Clause",
+        "LICENSE.LGPL-2.1",
+    ],
+}
+
 genrule {
     name: "libbpf_headers",
     srcs: [
@@ -26,10 +45,12 @@ genrule {
         "bpf/bpf_helpers.h",
         "bpf/bpf_tracing.h",
         "bpf/btf.h",
+        "bpf/hashmap.h",
         "bpf/libbpf_common.h",
         "bpf/libbpf.h",
         "bpf/libbpf_legacy.h",
         "bpf/libbpf_version.h",
+        "bpf/nlattr.h",
         "bpf/skel_internal.h",
         "bpf/xsk.h",
     ],
@@ -63,6 +84,8 @@ cc_library_static {
         "libz",
     ],
     visibility: [
+        "//external/bpftool",
+        "//external/bcc/libbpf-tools",
         "//external/dwarves",
         "//external/stg",
     ],
@@ -75,6 +98,7 @@ cc_library_static {
 
 cc_library {
     name: "libbpf_minimal",
+    vendor_available: true,
     native_bridge_supported: true,
     srcs: [
         "android/bpf_stub.c",
@@ -108,4 +132,7 @@ cc_binary {
         "libelf",
         "libz"
     ],
+    cflags: [
+        "-Wno-deprecated-declarations",
+    ]
 }

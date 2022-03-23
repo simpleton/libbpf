@@ -1,3 +1,5 @@
-connoro@google.com
+set noparent
+file:platform/system/bpf:master:/OWNERS_bpf
+
 maennich@google.com
 gprocida@google.com

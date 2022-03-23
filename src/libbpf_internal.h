@@ -92,6 +92,9 @@
 # define offsetofend(TYPE, FIELD) \
 	(offsetof(TYPE, FIELD) + sizeof(((TYPE *)0)->FIELD))
 #endif
+#ifndef __alias
+#define __alias(symbol) __attribute__((alias(#symbol)))
+#endif
 
 /* Check whether a string `str` has prefix `pfx`, regardless if `pfx` is
  * a string literal known at compilation time or char * pointer known only at
@@ -187,6 +190,8 @@ static inline void libbpf_strlcpy(char *dst, const char *src, size_t sz)
 		dst[i] = src[i];
 	dst[i] = '\0';
 }
+
+__u32 get_kernel_version(void);
 
 struct btf;
 struct btf_type;

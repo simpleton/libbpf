@@ -691,11 +691,11 @@ static int bpf_map_batch_common(int cmd, int fd, void  *in_batch,
 	return libbpf_err_errno(ret);
 }
 
-int bpf_map_delete_batch(int fd, void *keys, __u32 *count,
+int bpf_map_delete_batch(int fd, const void *keys, __u32 *count,
 			 const struct bpf_map_batch_opts *opts)
 {
 	return bpf_map_batch_common(BPF_MAP_DELETE_BATCH, fd, NULL,
-				    NULL, keys, NULL, count, opts);
+				    NULL, (void *)keys, NULL, count, opts);
 }
 
 int bpf_map_lookup_batch(int fd, void *in_batch, void *out_batch, void *keys,
@@ -715,11 +715,11 @@ int bpf_map_lookup_and_delete_batch(int fd, void *in_batch, void *out_batch,
 				    count, opts);
 }
 
-int bpf_map_update_batch(int fd, void *keys, void *values, __u32 *count,
+int bpf_map_update_batch(int fd, const void *keys, const void *values, __u32 *count,
 			 const struct bpf_map_batch_opts *opts)
 {
 	return bpf_map_batch_common(BPF_MAP_UPDATE_BATCH, fd, NULL, NULL,
-				    keys, values, count, opts);
+				    (void *)keys, (void *)values, count, opts);
 }
 
 int bpf_obj_pin(int fd, const char *pathname)
@@ -754,10 +754,10 @@ int bpf_prog_attach(int prog_fd, int target_fd, enum bpf_attach_type type,
 		.flags = flags,
 	);
 
-	return bpf_prog_attach_xattr(prog_fd, target_fd, type, &opts);
+	return bpf_prog_attach_opts(prog_fd, target_fd, type, &opts);
 }
 
-int bpf_prog_attach_xattr(int prog_fd, int target_fd,
+int bpf_prog_attach_opts(int prog_fd, int target_fd,
 			  enum bpf_attach_type type,
 			  const struct bpf_prog_attach_opts *opts)
 {
@@ -777,6 +777,11 @@ int bpf_prog_attach_xattr(int prog_fd, int target_fd,
 	ret = sys_bpf(BPF_PROG_ATTACH, &attr, sizeof(attr));
 	return libbpf_err_errno(ret);
 }
+
+__attribute__((alias("bpf_prog_attach_opts")))
+int bpf_prog_attach_xattr(int prog_fd, int target_fd,
+			  enum bpf_attach_type type,
+			  const struct bpf_prog_attach_opts *opts);
 
 int bpf_prog_detach(int target_fd, enum bpf_attach_type type)
 {
