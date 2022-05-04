@@ -12,25 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-package {
-    default_applicable_licenses: ["external_libbpf_license"],
-}
-
-// See: http://go/android-license-faq
-license {
-    name: "external_libbpf_license",
-    visibility: [":__subpackages__"],
-    license_kinds: [
-        "SPDX-license-identifier-BSD-2-Clause",
-        "SPDX-license-identifier-GPL-2.0",
-        "SPDX-license-identifier-LGPL-2.1-only",
-    ],
-    license_text: [
-        "LICENSE.BSD-2-Clause",
-        "LICENSE.LGPL-2.1",
-    ],
-}
-
 genrule {
     name: "libbpf_headers",
     srcs: [
@@ -80,14 +61,8 @@ cc_library_static {
         "-Wno-unused-parameter",
     ],
     static_libs: [
-        "libelf",
+        "dwarves_libelf",
         "libz",
-    ],
-    visibility: [
-        "//external/bpftool",
-        "//external/bcc/libbpf-tools",
-        "//external/dwarves",
-        "//external/stg",
     ],
     target: {
         host: {
@@ -99,7 +74,6 @@ cc_library_static {
 cc_library {
     name: "libbpf_minimal",
     vendor_available: true,
-    native_bridge_supported: true,
     srcs: [
         "android/bpf_stub.c",
         "src/bpf.c",
@@ -129,7 +103,7 @@ cc_binary {
     srcs: ["android/btfloader.cpp"],
     static_libs: [
         "libbpf",
-        "libelf",
+        "dwarves_libelf",
         "libz"
     ],
     cflags: [
